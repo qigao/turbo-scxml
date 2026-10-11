@@ -345,6 +345,58 @@ TurboSCXML uses fail-fast semantics:
 There is no implicit fallback from a newer provider contract to an older one
 when doing so would discard required semantics.
 
+## Independent Host Active Object
+
+The Component integration fixture uses a CFlow Machine Actor for independent
+Host control work. It borrows a DialogManager and its Component generation
+scope; it does not wrap a language Session in another Statechart. VoiceXML and
+CCXML retain their existing interpreter, controller and effect-ticket owners.
+This is a tested composition, not an installed VoiceXML Actor facade.
+
+The Host uses one owner-affine CFlow Executor and a Scheduler bound to that
+same executor. The owner drives progress, actions, subscriber callbacks and
+stop/destroy operations. Producers send small typed control values through
+retained Actor refs. Successful admission copies the value into a fixed-capacity
+mailbox; FULL rejects without changing an already accepted message. The control
+value is a fixture-local generation discriminator, not a copied Component scope
+or a general-purpose generation handle.
+
+The Actor action checks the borrowed scope generation and control value before
+calling `vxml_dialog_manager_run_ready`. Typed mailbox admission does not itself
+validate domain generation identity: a foreign generation control can be
+accepted into the mailbox and then fail at the Host action boundary. That
+failure preserves its first error, cancels queued controls and reports one
+`on_error`, without opening a document. Normal stop before owner progress cancels
+all queued controls and reports one `on_done` without advancing the dialog.
+
+Actor stop is distinct from DialogManager close. The manager still owns any
+committed CCXML dialog-start ticket. Teardown therefore settles and destroys the
+Actor while its callback context remains live, releases producer refs, closes
+the manager, and only then releases its Component scope and drains the generation.
+An observed Actor terminal state alone is not callback quiescence; drive the owner
+through terminal callback return before waiting or releasing borrowed objects.
+Producer refs reject after stop/failure and become STALE after Actor destruction.
+
+[`voicexml_component_dialog_test.c`](../../tests/voicexml_component_dialog_test.c)
+covers successful bounded delivery, FULL, copied payloads, queued-control stop,
+foreign-generation failure, retained-ref invalidation, and the existing real DSO
+generation-publication overlap. The latter gates the Host action before DSO
+document admission; it does not pause inside the DSO resource callback. These
+owner-affine tests do not qualify foreign-thread stop with a worker Scheduler or
+general concurrent DSO unload. Delivery and broader qualification remain tracked
+in [issue #303](https://github.com/qigao/turbo-scxml/issues/303); replacing the
+Session execution owner remains a separate investigation in
+[issue #304](https://github.com/qigao/turbo-scxml/issues/304).
+
+With the Component-enabled graph and matching SDK roots, the focused Windows
+VS developer-environment commands are:
+
+```powershell
+cmake --preset win-release-user -DTURBOSCXML_ENABLE_COMPONENT=ON
+cmake --build --preset win-release-user --target voicexml_component_dialog_test voicexml_dialog_manager_test voicexml_session_test
+ctest --preset win-release-user --output-on-failure -R "^voicexml_(component_dialog|dialog_manager|session)_test$"
+```
+
 ## Platform and package qualification
 
 Native SDK qualification is the release standard:

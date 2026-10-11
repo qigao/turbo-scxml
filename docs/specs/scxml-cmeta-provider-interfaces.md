@@ -69,7 +69,7 @@ Reflection is descriptive, not authority-granting.
 ## Plugin lifetime
 
 `TurboSCXML::Plugin` admits Interface exports with
-`salts_plugin_export_require_interface()`, comparing the plugin descriptor to
+`cmeta_plugin_export_require_interface()`, comparing the plugin descriptor to
 the canonical TurboSCXML descriptor by semantic interface shape.
 
 The resulting provider wrapper retains one Plugin lease:
@@ -98,6 +98,51 @@ CMeta Interface handle or adapter does not make the plugin DSO unload-safe.
 
 The bridge does not load, start, stop or unload plugins. Registry lifecycle
 policy remains owned by the application.
+
+## Scoped typed Interceptor qualification
+
+The Component integration tests use CMeta's `CMETA_INTERCEPTOR_TYPE` at the
+native `prepare_send` boundary. The chain and adapter in
+[`scxml_component_interceptor_probe.h`](../../tests/scxml_component_interceptor_probe.h)
+are test fixtures, not an installed TurboSCXML Interceptor API. Their explicit
+FunctionAbi describes the typed interception target; it does not replace the
+existing provider Interface or infer a generic callable from its vtable.
+
+The chain borrows its provider, hooks and contexts. The containing Component
+generation scope pins the DSO; interception does not acquire another lease.
+Hooks run forward before the target and backward after success or on error.
+A rejected call transfers no effect ticket. If rejection happens after the
+provider prepared a ticket, the target discards that ticket before returning.
+Only an accepted ticket transfers to the Session's CFlow effect journal for
+commit or rollback. Policy mutation in these fixtures occurs only while the
+Session executor is idle.
+
+[`scxml_component_dso_test.c`](../../tests/scxml_component_dso_test.c) checks
+these contracts using actual loaded Provider DSOs and Sessions:
+
+- A rejected hook raises `error.execution` without entering the provider.
+- A post-provider rejection discards exactly once, stops the remaining sends
+  in that executable block, and reaches the error recovery state. A later
+  explicit event succeeds through the same binding and commits once.
+- A journal rollback discards an accepted ticket after internal queue overflow.
+- Publishing a new generation leaves each live Session's interceptor bound to
+  its original provider. The old scope prevents unload until Session/provider
+  retirement; the new Session still sends through its own interceptor after
+  the old DSO is unloaded.
+
+Run the existing Component-enabled test graph through the user presets; on a
+Windows VS developer environment with matching SDK roots:
+
+```powershell
+cmake --preset win-release-user -DTURBOSCXML_ENABLE_COMPONENT=ON
+cmake --build --preset win-release-user --target scxml_component_dso_test scxml_component_test scxml_provider_test scxml_plugin_test
+ctest --preset win-release-user --output-on-failure -R "^scxml_(component_dso|component|provider|plugin)_test$"
+```
+
+These cases qualify synchronous `prepare_send` composition. They do not prove
+concurrent mutation of a chain, arbitrary callback interception or concurrent
+DSO unload without an external scope. Broader acceptance is tracked in
+[issue #302](https://github.com/qigao/turbo-scxml/issues/302).
 
 ## Static compatibility
 

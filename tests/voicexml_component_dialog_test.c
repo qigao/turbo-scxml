@@ -11,7 +11,8 @@
 /* P3 conformance fixture: the resource Interface is the existing canonical
  * scxml_text_resource_provider, projected from one Salts Component generation.
  * The VoiceXML DialogManager and CCXML ticket semantics remain authoritative.
- * There is no new provider registry, DSO lease or runtime/Actor in this test. */
+ * Independent Host Actors below only schedule control work; they do not own
+ * a second VoiceXML/CCXML language runtime or an additional provider lease. */
 #define VOICE_STATIC_COMPONENT "VoiceComponentResourceFixture"
 
 cmeta_component(VoiceComponentResourceFixture,
@@ -368,6 +369,14 @@ typedef struct voice_actor_probe {
     atomic_int last_message;
 } voice_actor_probe;
 
+static void voice_actor_check_owner(voice_actor_probe *probe) {
+    if ((probe->owner_thread != NULL &&
+         probe->owner_thread != cmeta_thread_current_token()) ||
+        (probe->forbidden_thread != NULL &&
+         probe->forbidden_thread == cmeta_thread_current_token()))
+        atomic_store(&probe->wrong_owner, true);
+}
+
 static bool voice_actor_progress(
     void *user, const void *state, const void *event,
     void *next_state, void *observation, const char **out_error) {
@@ -377,11 +386,7 @@ static bool voice_actor_progress(
     if (probe == NULL || state == NULL || event == NULL ||
         next_state == NULL || observation == NULL || out_error == NULL)
         return false;
-    if ((probe->owner_thread != NULL &&
-         probe->owner_thread != cmeta_thread_current_token()) ||
-        (probe->forbidden_thread != NULL &&
-         probe->forbidden_thread == cmeta_thread_current_token()))
-        atomic_store(&probe->wrong_owner, true);
+    voice_actor_check_owner(probe);
     if (probe->check_generation &&
         (probe->scope == NULL ||
          scxml_component_scope_generation_id(probe->scope) !=
@@ -423,11 +428,7 @@ static bool voice_actor_on_value(
     if (probe == NULL || value == NULL ||
         !cmeta_type_equal(type, &cmeta_type_int))
         return false;
-    if ((probe->owner_thread != NULL &&
-         probe->owner_thread != cmeta_thread_current_token()) ||
-        (probe->forbidden_thread != NULL &&
-         probe->forbidden_thread == cmeta_thread_current_token()))
-        atomic_store(&probe->wrong_owner, true);
+    voice_actor_check_owner(probe);
     atomic_store(&probe->last_message, *(const int *)value);
     atomic_fetch_add(&probe->values, 1);
     return true;
@@ -435,13 +436,187 @@ static bool voice_actor_on_value(
 
 static void voice_actor_on_error(void *user, const char *message) {
     voice_actor_probe *probe = (voice_actor_probe *)user;
-    if (probe != NULL && message != NULL)
+    if (probe != NULL && message != NULL) {
+        voice_actor_check_owner(probe);
         atomic_fetch_add(&probe->failures, 1);
+    }
 }
 
 static void voice_actor_on_done(void *user) {
     voice_actor_probe *probe = (voice_actor_probe *)user;
-    if (probe != NULL) atomic_fetch_add(&probe->dones, 1);
+    if (probe != NULL) {
+        voice_actor_check_owner(probe);
+        atomic_fetch_add(&probe->dones, 1);
+    }
+}
+
+/* Address-stable owner-side fixture for terminal paths. Control messages are
+ * copied ints in a capacity-two mailbox; the Actor borrows the manager and
+ * Component Scope until destruction. Closing the Actor cancels controls, not
+ * the independent DialogManager's committed CCXML start ticket. */
+typedef struct voice_actor_owner_fixture {
+    voice_resource_state resource;
+    voice_generation generation;
+    salts_component_plugin_runtime runtime;
+    scxml_component_scope scope;
+    voice_resource_borrow document;
+    vxml_dialog_manager manager;
+    voice_telephony upstream;
+    voice_events events;
+    cflow_machine machine;
+    cflow_executor executor;
+    cflow_scheduler scheduler;
+    cflow_actor actor;
+    cflow_actor_ref producer;
+    cflow_actor_ref retained;
+    voice_actor_probe probe;
+    bool executor_live;
+    bool scheduler_live;
+    bool manager_live;
+} voice_actor_owner_fixture;
+
+static bool voice_actor_owner_init(voice_actor_owner_fixture *f) {
+    static const char source[] = "mem:voice-actor-terminal";
+    static const char media[] = "application/voicexml+xml";
+    static const char connection[] = "terminal-call";
+    static const cflow_machine_state states[] = {
+        {10u, &cmeta_type_int, CFLOW_MACHINE_STATE_ACTIVE}
+    };
+    static const cflow_event_type types[] = {{100u, &cmeta_type_int}};
+    static const cflow_machine_action actions[] = {
+        {300u, &cmeta_type_int, 100u, &cmeta_type_int,
+         &cmeta_type_int, CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL,
+         CMETA_PROP_DETERMINISTIC | CMETA_PROP_NO_ALIAS,
+         CFLOW_MACHINE_ACTION_VALUE, &cmeta_type_int, 0u}
+    };
+    static const cflow_machine_transition transitions[] = {
+        {10u, 100u, 0u, 300u, 10u, 1u}
+    };
+    const cflow_machine_definition definition = {
+        states, 1u, 10u, types, 1u, NULL, 0u,
+        actions, 1u, transitions, 1u
+    };
+    const cflow_machine_action_binding binding = {
+        300u, voice_actor_progress, &f->probe
+    };
+    const ccxml_dialog_start_request request = {
+        .source = source, .source_size = sizeof(source) - 1u,
+        .media_type = media, .media_type_size = sizeof(media) - 1u,
+        .connection_id = connection,
+        .connection_id_size = sizeof(connection) - 1u
+    };
+    salts_component_plugin_generation *previous = NULL;
+    ccxml_string_view dialog = {0};
+    cflow_statechart_effect_ticket ticket = {0};
+    cflow_actor_config config = {0};
+    const char *error = NULL;
+    int initial_state = 0;
+
+    voice_resource_init(&f->resource, 100, source);
+    if (voice_generation_build(&f->generation, &f->resource, UINT64_C(41)) !=
+        SALTS_COMPONENT_PLUGIN_OK) return false;
+    if (salts_component_plugin_runtime_init(&f->runtime) !=
+        SALTS_COMPONENT_PLUGIN_OK) return false;
+    if (salts_component_plugin_runtime_publish(
+            &f->runtime, &f->generation.generation, &previous) !=
+        SALTS_COMPONENT_PLUGIN_OK) return false;
+    if (scxml_component_scope_acquire(&f->scope, &f->runtime) !=
+        SCXML_COMPONENT_OK) return false;
+    if (!voice_resource_bind(&f->document, &f->scope, VOICE_STATIC_COMPONENT))
+        return false;
+    if (voice_manager_init(&f->manager, &f->document, &f->upstream, &f->events) !=
+        VXML_DIALOG_MANAGER_OK) return false;
+    f->manager_live = true;
+    if (vxml_dialog_manager_ccxml_adapter()->prepare_dialog_start(
+            vxml_dialog_manager_ccxml_user(&f->manager), &request,
+            &dialog, &ticket, &error) != SCXML_ADAPTER_ACCEPTED)
+        return false;
+    if (ticket.commit == NULL || ticket.discard == NULL) {
+        if (ticket.discard != NULL) ticket.discard(ticket.user);
+        return false;
+    }
+    ticket.commit(ticket.user);
+
+    atomic_init(&f->probe.gate_entered, false);
+    atomic_init(&f->probe.gate_release, false);
+    atomic_init(&f->probe.wrong_owner, false);
+    atomic_init(&f->probe.actions, 0);
+    atomic_init(&f->probe.values, 0);
+    atomic_init(&f->probe.failures, 0);
+    atomic_init(&f->probe.dones, 0);
+    atomic_init(&f->probe.last_message, -1);
+    f->probe.manager = &f->manager;
+    f->probe.scope = &f->scope;
+    f->probe.generation_id = UINT64_C(41);
+    f->probe.expected_control = 41;
+    f->probe.check_generation = true;
+    f->probe.owner_thread = cmeta_thread_current_token();
+    if (cflow_machine_build(&f->machine, &definition) != CFLOW_MACHINE_OK)
+        return false;
+    if (!cflow_executor_owner_init_with_capacity(&f->executor, 8u, NULL, NULL))
+        return false;
+    f->executor_live = true;
+    if (!cflow_scheduler_owner_bind(&f->scheduler, &f->executor, 4u))
+        return false;
+    f->scheduler_live = true;
+    config.machine = (cflow_machine_instance_config){
+        &f->machine, &initial_state, &cmeta_type_int,
+        NULL, 0u, &binding, 1u, 2u, &f->executor
+    };
+    config.scheduler = &f->scheduler;
+    config.callbacks = (cflow_subscriber_callbacks){
+        voice_actor_on_value, voice_actor_on_error, voice_actor_on_done, &f->probe
+    };
+    if (cflow_actor_init(&f->actor, &config).status != CFLOW_ACTOR_OK)
+        return false;
+    return cflow_actor_ref_acquire(&f->actor, &f->producer) &&
+           cflow_actor_ref_retain(&f->producer, &f->retained);
+}
+
+static bool voice_actor_owner_cleanup(voice_actor_owner_fixture *f) {
+    bool ok = true;
+    salts_component_plugin_generation *previous = NULL;
+    /* Destruction runs on the owner and settles queued executor work before
+       any callback context, DialogManager or Component borrow is released. */
+    cflow_actor_destroy(&f->actor);
+    cflow_actor_ref_release(&f->producer);
+    cflow_actor_ref_release(&f->retained);
+    if (f->scheduler_live) cflow_scheduler_destroy(&f->scheduler);
+    if (f->executor_live) cflow_executor_destroy(&f->executor);
+    cflow_machine_destroy(&f->machine);
+    if (f->manager_live) {
+        vxml_dialog_manager_close(&f->manager);
+        f->upstream.quiescent = true;
+        ok = vxml_dialog_manager_destroy(&f->manager) ==
+             VXML_DIALOG_MANAGER_OK && ok;
+    }
+    if (f->scope.live)
+        ok = scxml_component_scope_release(&f->scope) == SCXML_COMPONENT_OK && ok;
+    if (f->runtime.initialized && f->runtime.current != NULL)
+        ok = salts_component_plugin_runtime_close(&f->runtime, &previous) ==
+             SALTS_COMPONENT_PLUGIN_OK && ok;
+    if (f->generation.generation.state == SALTS_COMPONENT_PLUGIN_GENERATION_DRAINING)
+        ok = salts_component_plugin_generation_drain(
+            &f->runtime, &f->generation.generation) == SALTS_COMPONENT_PLUGIN_OK && ok;
+    else if (f->generation.generation.state == SALTS_COMPONENT_PLUGIN_GENERATION_BUILT)
+        ok = salts_component_plugin_generation_discard(&f->generation.generation) ==
+             SALTS_COMPONENT_PLUGIN_OK && ok;
+    if (f->runtime.initialized)
+        ok = salts_component_plugin_runtime_destroy(&f->runtime) ==
+             SALTS_COMPONENT_PLUGIN_OK && ok;
+    return ok;
+}
+
+static bool voice_actor_owner_settle(voice_actor_owner_fixture *f) {
+    const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+    while (cmeta_monotonic_ms() < deadline) {
+        cflow_actor_state state = cflow_actor_current_state(&f->actor);
+        if ((state == CFLOW_ACTOR_STATE_STOPPED || state == CFLOW_ACTOR_STATE_FAILED) &&
+            cflow_executor_pending(&f->executor) == 0u)
+            return true;
+        if (!cflow_executor_run_one(&f->executor)) cmeta_sleep_ms(1u);
+    }
+    return false;
 }
 
 /* Cross-thread test publisher for one owner-affine Host Actor. The Actor
@@ -542,6 +717,122 @@ finished:
        must not leave its CFlow callback blocked or leak the test thread. */
     atomic_store_explicit(
         &ctx->gate->gate_release, true, memory_order_release);
+}
+
+spec("VoiceXML Host Active Object terminal ownership") {
+    static voice_actor_owner_fixture fixture;
+
+    before_each() {
+        memset(&fixture, 0, sizeof(fixture));
+        check_true(voice_actor_owner_init(&fixture));
+    }
+    after_each() {
+        check_true(voice_actor_owner_cleanup(&fixture));
+        check_equal(fixture.upstream.close_count, (size_t)1u);
+        check_equal(fixture.resource.open_count, (size_t)0u);
+        check_equal(fixture.resource.close_count, (size_t)0u);
+        check_equal(fixture.resource.outstanding, (size_t)0u);
+    }
+
+    it("cancels queued controls on stop without opening the committed dialog") {
+        int payload = 41;
+        const cflow_event_view control = {100u, &cmeta_type_int, &payload};
+        cflow_actor_stats stats = {0};
+        check_equal(cflow_actor_start(&fixture.actor), CFLOW_ACTOR_OK);
+        check_equal(cflow_actor_ref_try_send(&fixture.producer, &control),
+                    CFLOW_ACTOR_SEND_ACCEPTED);
+        check_equal(cflow_actor_ref_try_send(&fixture.retained, &control),
+                    CFLOW_ACTOR_SEND_ACCEPTED);
+        check_equal(cflow_actor_ref_try_send(&fixture.producer, &control),
+                    CFLOW_ACTOR_SEND_FULL);
+        check_true(cflow_actor_get_stats(&fixture.actor, &stats));
+        check_equal(stats.machine.pending, (size_t)2u);
+
+        /* No owner progress has run, so neither accepted control has entered
+           the DialogManager. Stop cancels both instead of draining them. */
+        check_equal(cflow_actor_request_stop(&fixture.actor), CFLOW_ACTOR_OK);
+        check_true(voice_actor_owner_settle(&fixture));
+        check_equal(cflow_actor_wait(&fixture.actor), CFLOW_ACTOR_STATE_STOPPED);
+        check_equal(cflow_actor_request_stop(&fixture.actor), CFLOW_ACTOR_STOPPED);
+        check_equal(cflow_actor_ref_try_send(&fixture.retained, &control),
+                    CFLOW_ACTOR_SEND_STOPPED);
+        check_true(cflow_actor_get_stats(&fixture.actor, &stats));
+        check_equal(stats.machine.accepted, UINT64_C(2));
+        check_equal(stats.machine.completed, UINT64_C(0));
+        check_equal(stats.machine.failed, UINT64_C(0));
+        check_equal(stats.machine.cancelled_events, UINT64_C(2));
+        check_equal(stats.machine.pending, (size_t)0u);
+        check_equal(stats.machine.in_flight, (size_t)0u);
+        check_equal(atomic_load(&fixture.probe.actions), 0);
+        check_equal(atomic_load(&fixture.probe.values), 0);
+        check_equal(atomic_load(&fixture.probe.failures), 0);
+        check_equal(atomic_load(&fixture.probe.dones), 1);
+        check_equal(fixture.resource.open_count, (size_t)0u);
+        check_equal(fixture.resource.close_count, (size_t)0u);
+        check_equal(fixture.events.count, (size_t)0u);
+        check_equal(fixture.upstream.close_count, (size_t)0u);
+
+        cflow_actor_destroy(&fixture.actor);
+        check_equal(cflow_actor_ref_try_send(&fixture.producer, &control),
+                    CFLOW_ACTOR_SEND_STALE);
+        check_equal(cflow_actor_ref_try_send(&fixture.retained, &control),
+                    CFLOW_ACTOR_SEND_STALE);
+        check_equal(atomic_load(&fixture.probe.dones), 1);
+        check_false(atomic_load(&fixture.probe.wrong_owner));
+        /* Actor teardown does not own the manager's CCXML ticket or Scope;
+           after_each closes them in dependency order without document I/O. */
+        check_equal(fixture.upstream.close_count, (size_t)0u);
+        check_true(fixture.scope.live);
+    }
+
+    it("fails a foreign generation before document admission and cancels the queued control") {
+        int payload = 42;
+        const cflow_event_view control = {100u, &cmeta_type_int, &payload};
+        cflow_actor_stats stats = {0};
+        check_equal(cflow_actor_start(&fixture.actor), CFLOW_ACTOR_OK);
+        /* Mailbox admission checks the type. The Host action checks the
+           copied generation before any DialogManager or resource call. */
+        check_equal(cflow_actor_ref_try_send(&fixture.producer, &control),
+                    CFLOW_ACTOR_SEND_ACCEPTED);
+        payload = 41;
+        check_equal(cflow_actor_ref_try_send(&fixture.retained, &control),
+                    CFLOW_ACTOR_SEND_ACCEPTED);
+        payload = 999;
+        check_true(voice_actor_owner_settle(&fixture));
+        check_equal(cflow_actor_wait(&fixture.actor), CFLOW_ACTOR_STATE_FAILED);
+        check_equal(cflow_actor_error(&fixture.actor),
+                    "stale or foreign VoiceXML Actor generation");
+        check_equal(cflow_actor_ref_try_send(&fixture.retained, &control),
+                    CFLOW_ACTOR_SEND_FAILED);
+        check_equal(cflow_actor_request_stop(&fixture.actor), CFLOW_ACTOR_FAILED);
+        check_equal(cflow_actor_error(&fixture.actor),
+                    "stale or foreign VoiceXML Actor generation");
+        check_true(cflow_actor_get_stats(&fixture.actor, &stats));
+        check_equal(stats.machine.accepted, UINT64_C(2));
+        check_equal(stats.machine.failed, UINT64_C(1));
+        check_equal(stats.machine.cancelled_events, UINT64_C(1));
+        check_equal(stats.machine.completed, UINT64_C(0));
+        check_equal(stats.machine.pending, (size_t)0u);
+        check_equal(stats.machine.in_flight, (size_t)0u);
+        check_equal(atomic_load(&fixture.probe.failures), 1);
+        check_equal(atomic_load(&fixture.probe.dones), 0);
+        check_equal(atomic_load(&fixture.probe.actions), 0);
+        check_equal(atomic_load(&fixture.probe.values), 0);
+        check_false(atomic_load(&fixture.probe.wrong_owner));
+        check_equal(fixture.resource.open_count, (size_t)0u);
+        check_equal(fixture.resource.close_count, (size_t)0u);
+        check_equal(fixture.events.count, (size_t)0u);
+
+        cflow_actor_destroy(&fixture.actor);
+        check_equal(cflow_actor_ref_try_send(&fixture.producer, &control),
+                    CFLOW_ACTOR_SEND_STALE);
+        check_equal(cflow_actor_ref_try_send(&fixture.retained, &control),
+                    CFLOW_ACTOR_SEND_STALE);
+        check_equal(atomic_load(&fixture.probe.failures), 1);
+        check_false(atomic_load(&fixture.probe.wrong_owner));
+        check_equal(fixture.upstream.close_count, (size_t)0u);
+        check_true(fixture.scope.live);
+    }
 }
 
 spec("VoiceXML/CCXML Component resource generation") {
